@@ -7,6 +7,7 @@
 #include "user_interface.h"
 #include "driver/uart.h"
 #include "osapi.h"
+#include "sinus.h"
 
 #define CANARY_VALUE 0x32383132
 #define MODE_SINGLE  0
@@ -24,6 +25,40 @@ typedef struct {
   uint8_t colorsPerLed;
   uint8_t values[0];
 } ws2812_buffer;
+
+void hsi2grbw(int H, int S, int I, int* grbw, int use_rgbw, int swap_gr) {
+  int idx2, idx1, idx0;
+      
+  if(H < 120) {
+    idx0 = 1;
+    idx1 = 0;
+    idx2 = 2;
+  } else if(H < 240) {
+    H = H - 120;
+    idx0 = 0;
+    idx1 = 2;
+    idx2 = 1;
+  } else {
+    H = H - 240;
+    idx0 = 2;
+    idx1 = 1;
+    idx2 = 0;
+  }
+
+    if(!use_rgbw)
+    {
+      grbw[idx0] = (I+SIcosH_cos_H(H,S,I));
+      grbw[idx1] = (I+(((S*I)>>10)-SIcosH_cos_H(H,S,I)));
+      grbw[idx2] = (I-((I*S)>>10));
+    }
+    else
+    {
+      grbw[idx0] = (((S*I)>>10)+SIcosH_cos_H(H,S,I))/12;
+      grbw[idx1] = (((S*I)>>10)+(((S*I)>>10)-SIcosH_cos_H(H,S,I)))/12;
+      grbw[idx2] = 0;
+      grbw[3] = ((1023-S)*I)>>12;
+    }
+}
 
 // Init UART1 to be able to stream WS2812 data to GPIO2 pin
 // If DUAL mode is selected, init UART0 to stream to TXD0 as well
@@ -229,6 +264,50 @@ static int ws2812_buffer_fill(lua_State* L) {
   return 0;
 }
 
+static int ws2812_buffer_fillHSI(lua_State* L) {
+  ws2812_buffer * buffer = (ws2812_buffer*)lua_touserdata(L, 1);
+  luaL_argcheck(L, buffer && buffer->canary == CANARY_VALUE, 1, "ws2812.buffer expected");
+  luaL_checktype(L, 2, LUA_TTABLE);
+
+  int i, j;
+  int hsi_in[3];
+  int grbw_out[4];
+    
+  for(j = 0; j < buffer->size; j++)
+  {
+    lua_pushinteger(L, j+1);
+    lua_gettable(L, 2);      
+    if (lua_istable(L, -1))
+    {
+      for(i = 1; i <= 3; i++)
+      {
+        lua_pushinteger(L, i);
+        lua_gettable(L, -2);
+        hsi_in[i-1] = luaL_checknumber(L, -1);
+        lua_pop(L, 1);
+      }       
+      hsi2grbw(hsi_in[0], hsi_in[1], hsi_in[2], grbw_out, (buffer->colorsPerLed>3)?1:0, 1); 
+    }
+  
+    if(buffer->colorsPerLed == 3)
+    {
+      buffer->values[3*j+0] = grbw_out[0];
+      buffer->values[3*j+1] = grbw_out[1];
+      buffer->values[3*j+2] = grbw_out[2];
+    }
+    else if(buffer->colorsPerLed == 4)    
+    {
+      buffer->values[4*j+0] = grbw_out[0];
+      buffer->values[4*j+1] = grbw_out[1];
+      buffer->values[4*j+2] = grbw_out[2];
+      buffer->values[4*j+3] = grbw_out[3];
+    }
+    lua_pop(L, 1); 
+  }    
+
+  return 0;
+}
+
 static int ws2812_buffer_fade(lua_State* L) {
   ws2812_buffer * buffer = (ws2812_buffer*)lua_touserdata(L, 1);
   const int fade = luaL_checkinteger(L, 2);
@@ -400,6 +479,7 @@ static const LUA_REG_TYPE ws2812_buffer_map[] =
 {
   { LSTRKEY( "fade" ),    LFUNCVAL( ws2812_buffer_fade )},
   { LSTRKEY( "fill" ),    LFUNCVAL( ws2812_buffer_fill )},
+  { LSTRKEY( "fillHSI" ),  LFUNCVAL( ws2812_buffer_fillHSI )},
   { LSTRKEY( "get" ),     LFUNCVAL( ws2812_buffer_get )},
   { LSTRKEY( "set" ),     LFUNCVAL( ws2812_buffer_set )},
   { LSTRKEY( "size" ),    LFUNCVAL( ws2812_buffer_size )},
