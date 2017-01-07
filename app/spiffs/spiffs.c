@@ -2,6 +2,8 @@
 #include "platform.h"
 #include "spiffs.h"
 
+#include "spiffs_nucleus.h"
+
 spiffs fs;
 
 #define LOG_PAGE_SIZE       	256
@@ -10,9 +12,9 @@ spiffs fs;
 #define MIN_BLOCKS_FS		4
   
 static u8_t spiffs_work_buf[LOG_PAGE_SIZE*2];
-static u8_t spiffs_fds[32*4];
+static u8_t spiffs_fds[sizeof(spiffs_fd) * SPIFFS_MAX_OPEN_FILES];
 #if SPIFFS_CACHE
-static u8_t spiffs_cache[(LOG_PAGE_SIZE+32)*2];
+static u8_t myspiffs_cache[(LOG_PAGE_SIZE+32)*2];
 #endif
 
 static s32_t my_spiffs_read(u32_t addr, u32_t size, u8_t *dst) {
@@ -51,8 +53,14 @@ static bool myspiffs_set_location(spiffs_config *cfg, int align, int offset, int
 #ifdef SPIFFS_FIXED_LOCATION
   cfg->phys_addr = (SPIFFS_FIXED_LOCATION + block_size - 1) & ~(block_size-1);
 #else
-  cfg->phys_addr = ( u32_t )platform_flash_get_first_free_block_address( NULL ) + offset; 
-  cfg->phys_addr = (cfg->phys_addr + align - 1) & ~(align - 1);
+  if (flash_safe_get_size_byte() <= FLASH_SIZE_4MBYTE) {
+    // 256kByte - 4MByte modules: SPIFFS partition starts right after firmware image
+    cfg->phys_addr = ( u32_t )platform_flash_get_first_free_block_address( NULL ) + offset;
+    cfg->phys_addr = (cfg->phys_addr + align - 1) & ~(align - 1);
+  } else {
+    // > 4MByte modules: SPIFFS partition starts after SDK data
+    cfg->phys_addr = flash_rom_get_size_byte();
+  }
 #endif
 #ifdef SPIFFS_SIZE_1M_BOUNDARY
   cfg->phys_size = ((0x100000 - (SYS_PARAM_SEC_NUM * INTERNAL_FLASH_SECTOR_SIZE) - ( ( u32_t )cfg->phys_addr )) & ~(block_size - 1)) & 0xfffff;
@@ -168,8 +176,8 @@ static bool myspiffs_mount_internal(bool force_mount) {
     spiffs_fds,
     sizeof(spiffs_fds),
 #if SPIFFS_CACHE
-    spiffs_cache,
-    sizeof(spiffs_cache),
+    myspiffs_cache,
+    sizeof(myspiffs_cache),
 #else
     0, 0,
 #endif
@@ -431,13 +439,17 @@ static sint32_t myspiffs_vfs_close( const struct vfs_file *fd ) {
 static sint32_t myspiffs_vfs_read( const struct vfs_file *fd, void *ptr, size_t len ) {
   GET_FILE_FH(fd);
 
-  return SPIFFS_read( &fs, fh, ptr, len );
+  sint32_t n = SPIFFS_read( &fs, fh, ptr, len );
+
+  return n >= 0 ? n : VFS_RES_ERR;
 }
 
 static sint32_t myspiffs_vfs_write( const struct vfs_file *fd, const void *ptr, size_t len ) {
   GET_FILE_FH(fd);
 
-  return SPIFFS_write( &fs, fh, (void *)ptr, len );
+  sint32_t n = SPIFFS_write( &fs, fh, (void *)ptr, len );
+
+  return n >= 0 ? n : VFS_RES_ERR;
 }
 
 static sint32_t myspiffs_vfs_lseek( const struct vfs_file *fd, sint32_t off, int whence ) {
@@ -457,7 +469,8 @@ static sint32_t myspiffs_vfs_lseek( const struct vfs_file *fd, sint32_t off, int
     break;
   }
 
-  return SPIFFS_lseek( &fs, fh, off, spiffs_whence );
+  sint32_t res = SPIFFS_lseek( &fs, fh, off, spiffs_whence );
+  return res >= 0 ? res : VFS_RES_ERR;
 }
 
 static sint32_t myspiffs_vfs_eof( const struct vfs_file *fd ) {
