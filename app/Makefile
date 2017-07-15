@@ -38,7 +38,6 @@ SUBDIRS= 					\
 	smart 					\
 	modules 				\
 	spiffs 					\
-	cjson 					\
 	crypto 					\
 	dhtlib					\
 	tsl2561					\
@@ -46,7 +45,12 @@ SUBDIRS= 					\
 	http					\
 	fatfs					\
 	esp-gdbstub				\
-	websocket
+	websocket				\
+	swTimer					\
+	misc					\
+	pm					\
+	sjson					\
+	
 
 endif # } PDIR
 
@@ -87,16 +91,20 @@ COMPONENTS_eagle.app.v6 = 			\
 	smart/smart.a 				\
 	spiffs/spiffs.a 			\
 	fatfs/libfatfs.a			\
-	cjson/libcjson.a 			\
 	crypto/libcrypto.a 			\
 	dhtlib/libdhtlib.a 			\
 	tsl2561/tsl2561lib.a			\
 	http/libhttp.a				\
+	pm/libpm.a				\
 	websocket/libwebsocket.a		\
 	esp-gdbstub/libgdbstub.a		\
 	net/libnodemcu_net.a			\
-	mbedtls/libmbedtls.a      \
+	mbedtls/libmbedtls.a      		\
 	modules/libmodules.a			\
+	swTimer/libswtimer.a			\
+	misc/libmisc.a				\
+	sjson/libsjson.a			\
+	
 
 # Inspect the modules library and work out which modules need to be linked.
 # For each enabled module, a symbol name of the form XYZ_module_selected is
@@ -126,6 +134,7 @@ LINKFLAGS_eagle.app.v6 = 			\
 	-lwpa2					\
 	-lsmartconfig 				\
 	-lcrypto				\
+	-lwps					\
 	$(DEP_LIBS_eagle.app.v6) 		\
 	-Wl,--end-group 			\
 	-lm

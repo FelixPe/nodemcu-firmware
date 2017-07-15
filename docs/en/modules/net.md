@@ -13,11 +13,16 @@ Constants to be used in other functions: `net.TCP`, `net.UDP`
 Creates a client.
 
 #### Syntax
-`net.createConnection(type, secure)`
+`net.createConnection([type[, secure]])`
 
 #### Parameters
-- `type` `net.TCP` or `net.UDP`. UDP connections chained to [net.createUDPSocket()](#netcreateudpsocket)
-- `secure` 1 for encrypted, 0 for plain. Secure connections chained to [tls.createConnection()](tls.md#tlscreateconnection)
+- `type` `net.TCP` (default) or `net.UDP`
+- `secure` 1 for encrypted, 0 for plain (default)
+
+!!! attention
+    This will change in upcoming releases so that `net.createConnection` will always create an unencrypted TCP connection.
+
+    There's no such thing as a UDP _connection_ because UDP is connection*less*. Thus no connection `type` parameter should be required. For UDP use [net.createUDPSocket()](#netcreateudpsocket) instead. To create *secure* connections use [tls.createConnection()](tls.md#tlscreateconnection) instead.
 
 #### Returns
 
@@ -39,11 +44,14 @@ net.createConnection(net.TCP, 0)
 Creates a server.
 
 #### Syntax
-`net.createServer(type, timeout)`
+`net.createServer([type[, timeout]])`
 
 #### Parameters
-- `type` `net.TCP` or `net.UDP`. UDP connections chained to [net.createUDPSocket()](#netcreateudpsocket)
-- `timeout` for a TCP server timeout is 1~28'800 seconds (for an inactive client to be disconnected)
+- `type` `net.TCP` (default) or `net.UDP`
+- `timeout` for a TCP server timeout is 1~28'800 seconds, 30 sec by default (for an inactive client to be disconnected)
+
+!!! attention
+    The `type` parameter will be removed in upcoming releases so that `net.createServer` will always create a TCP-based server. For UDP use [net.createUDPSocket()](#netcreateudpsocket) instead.
 
 #### Returns
 
@@ -70,7 +78,7 @@ Creates an UDP socket.
 none
 
 #### Returns
-net.udpsocket sub module
+[net.udpsocket sub module](#netudpsocket-module)
 
 #### See also
 [`net.createConnection()`](#netcreateconnection)
@@ -310,12 +318,31 @@ Otherwise, all connection errors (with normal close) passed to disconnection eve
 ```lua
 srv = net.createConnection(net.TCP, 0)
 srv:on("receive", function(sck, c) print(c) end)
+-- Wait for connection before sending.
 srv:on("connection", function(sck, c)
-  -- Wait for connection before sending.
-  sck:send("GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: keep-alive\r\nAccept: */*\r\n\r\n")
+  -- 'Connection: close' rather than 'Connection: keep-alive' to have server 
+  -- initiate a close of the connection after final response (frees memory 
+  -- earlier here), https://tools.ietf.org/html/rfc7230#section-6.6 
+  sck:send("GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\nAccept: */*\r\n\r\n")
 end)
 srv:connect(80,"httpbin.org")
 ```
+!!! note
+    The `receive` event is fired for every network frame! Hence, if the data sent to the device exceeds 1460 bytes (derived from [Ethernet frame size](https://en.wikipedia.org/wiki/Ethernet_frame)) it will fire more than once. There may be other situations where incoming data is split across multiple frames (e.g. HTTP POST with `multipart/form-data`). You need to manually buffer the data and find means to determine if all data was received.
+    
+```lua
+local buffer = nil
+
+srv:on("receive", function(sck, c)
+  if buffer == nil then
+    buffer = c
+  else
+    buffer = buffer .. c
+  end
+end)
+-- throttling could be implemented using socket:hold()
+-- example: https://github.com/nodemcu/nodemcu-firmware/blob/master/lua_examples/pcm/play_network.lua#L83
+```    
 
 #### See also
 - [`net.createServer()`](#netcreateserver)
@@ -392,6 +419,29 @@ end)
 #### See also
 [`net.socket:on()`](#netsocketon)
 
+## net.socket:ttl()
+
+Changes or retrieves Time-To-Live value on socket.
+
+#### Syntax
+`ttl([ttl])`
+
+#### Parameters
+- `ttl` (optional) new time-to-live value
+
+#### Returns
+current / new ttl value
+
+#### Example
+```lua
+sk = net.createConnection(net.TCP, 0)
+sk:connect(80, '192.168.1.1')
+sk:ttl(1) -- restrict frames to single subnet
+```
+
+#### See also
+[`net.createConnection()`](#netcreateconnection)
+
 ## net.socket:unhold()
 
 Unblock TCP receiving data by revocation of a preceding `hold()`.
@@ -410,6 +460,14 @@ none
 
 # net.udpsocket Module
 
+Remember that in contrast to TCP [UDP](https://en.wikipedia.org/wiki/User_Datagram_Protocol) is connectionless. Therefore, there is a minor but natural mismatch as for TCP/UDP functions in this module. While you would call [net.createConnection()](#netcreateconnection) for TCP it is [net.createUDPSocket()](#netcreateudpsocket) for UDP.
+
+Other points worth noting:
+
+- UDP sockets do not have a connection callback for the [`listen`](#netudpsocketlisten) function.
+- UDP sockets do not have a `connect` function. Remote IP and port thus need to be defined in [`send()`](#netudpsocketsend).
+- UDP socket's `receive` callback receives port/ip after the `data` argument.
+
 ## net.udpsocket:close()
 
 Closes UDP socket.
@@ -426,13 +484,43 @@ The syntax and functional similar to [`net.server:listen()`](#netserverlisten), 
 
 Register callback functions for specific events.
 
-The syntax and functional similar to [`net.socket:on()`](#netsocketon), only "received", "sent" and "dns" events are valid.
+The syntax and functional similar to [`net.socket:on()`](#netsocketon). However, only "receive", "sent" and "dns" are supported events.
 
-**`received` callback have `port` and `ip` after `data` argument.**
+!!! note
+	The `receive` callback receives `port` and `ip` *after* the `data` argument.
 
 ## net.udpsocket:send()
 
 Sends data to specific remote peer.
+
+#### Syntax
+`send(port, ip, data)`
+
+#### Parameters
+- `port` remote socket port
+- `ip` remote socket IP
+- `data` the payload to send
+
+#### Returns
+`nil`
+
+#### Example
+```lua
+udpSocket = net.createUDPSocket()
+udpSocket:listen(5000)
+udpSocket:on("receive", function(s, data, port, ip)
+    print(string.format("received '%s' from %s:%d", data, ip, port))
+    s:send(port, ip, "echo: " .. data)
+end)
+port, ip = udpSocket:getaddr()
+print(string.format("local UDP socket address / port: %s:%d", ip, port))
+```
+On *nix systems that can then be tested by issuing
+
+```
+echo -n "foo" | nc -w1 -u <device-IP-address> 5000
+```
+
 
 ## net.udpsocket:dns()
 
@@ -445,6 +533,12 @@ The syntax and functional identical to [`net.socket:dns()`](#netsocketdns).
 Retrieve local port and ip of socket.
 
 The syntax and functional identical to [`net.socket:getaddr()`](#netsocketgetaddr).
+
+## net.udpsocket:ttl()
+
+Changes or retrieves Time-To-Live value on socket.
+
+The syntax and functional identical to [`net.socket:ttl()`](#netsocketttl).
 
 # net.dns Module
 

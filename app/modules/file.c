@@ -13,6 +13,14 @@
 
 #define FILE_READ_CHUNK 1024
 
+// use this time/date in absence of a timestamp
+#define FILE_TIMEDEF_YEAR 1970
+#define FILE_TIMEDEF_MON 01
+#define FILE_TIMEDEF_DAY 01
+#define FILE_TIMEDEF_HOUR 00
+#define FILE_TIMEDEF_MIN 00
+#define FILE_TIMEDEF_SEC 00
+
 static int file_fd = 0;
 static int file_fd_ref = LUA_NOREF;
 static int rtc_cb_ref = LUA_NOREF;
@@ -33,12 +41,12 @@ static void table2tm( lua_State *L, vfs_time *tm )
   lua_getfield( L, idx, "min" );
   lua_getfield( L, idx, "sec" );
 
-  tm->year = luaL_optint( L, ++idx, 2016 );
-  tm->mon  = luaL_optint( L, ++idx, 6 );
-  tm->day  = luaL_optint( L, ++idx, 21 );
-  tm->hour = luaL_optint( L, ++idx, 0 );
-  tm->min  = luaL_optint( L, ++idx, 0 );
-  tm->sec  = luaL_optint( L, ++idx, 0 );
+  tm->year = luaL_optint( L, ++idx, FILE_TIMEDEF_YEAR );
+  tm->mon  = luaL_optint( L, ++idx, FILE_TIMEDEF_MON );
+  tm->day  = luaL_optint( L, ++idx, FILE_TIMEDEF_DAY );
+  tm->hour = luaL_optint( L, ++idx, FILE_TIMEDEF_HOUR );
+  tm->min  = luaL_optint( L, ++idx, FILE_TIMEDEF_MIN );
+  tm->sec  = luaL_optint( L, ++idx, FILE_TIMEDEF_SEC );
 
   // remove items from stack
   lua_pop( L, 6 );
@@ -206,14 +214,13 @@ static int file_open( lua_State* L )
 static int file_list( lua_State* L )
 {
   vfs_dir  *dir;
-  vfs_item *item;
 
   if (dir = vfs_opendir("")) {
     lua_newtable( L );
-    while (item = vfs_readdir(dir)) {
-      lua_pushinteger(L, vfs_item_size(item));
-      lua_setfield(L, -2, vfs_item_name(item));
-      vfs_closeitem(item);
+    struct vfs_stat stat;
+    while (vfs_readdir(dir, &stat) == VFS_RES_OK) {
+      lua_pushinteger(L, stat.size);
+      lua_setfield(L, -2, stat.name);
     }
     vfs_closedir(dir);
     return 1;
@@ -262,11 +269,8 @@ static int file_exists( lua_State* L )
   const char *basename = vfs_basename( fname );
   luaL_argcheck(L, c_strlen(basename) <= FS_OBJ_NAME_LEN && c_strlen(fname) == len, 1, "filename invalid");
 
-  vfs_item *stat = vfs_stat((char *)fname);
-
-  lua_pushboolean(L, stat ? 1 : 0);
-
-  if (stat) vfs_closeitem(stat);
+  struct vfs_stat stat;
+  lua_pushboolean(L, vfs_stat((char *)fname, &stat) == VFS_RES_OK ? 1 : 0);
 
   return 1;
 }
@@ -314,6 +318,68 @@ static int file_rename( lua_State* L )
   } else {
     lua_pushboolean(L, 0);
   }
+  return 1;
+}
+
+// Lua: stat(filename)
+static int file_stat( lua_State* L )
+{
+  size_t len;
+  const char *fname = luaL_checklstring( L, 1, &len );    
+  luaL_argcheck( L, c_strlen(fname) <= FS_OBJ_NAME_LEN && c_strlen(fname) == len, 1, "filename invalid" );
+
+  struct vfs_stat stat;
+  if (vfs_stat( (char *)fname, &stat ) != VFS_RES_OK) {
+    lua_pushnil( L );
+    return 1;
+  }
+
+  lua_createtable( L, 0, 7 );
+
+  lua_pushinteger( L, stat.size );
+  lua_setfield( L, -2, "size" );
+
+  lua_pushstring( L, stat.name );
+  lua_setfield( L, -2, "name" );
+
+  lua_pushboolean( L, stat.is_dir );
+  lua_setfield( L, -2, "is_dir" );
+
+  lua_pushboolean( L, stat.is_rdonly );
+  lua_setfield( L, -2, "is_rdonly" );
+
+  lua_pushboolean( L, stat.is_hidden );
+  lua_setfield( L, -2, "is_hidden" );
+
+  lua_pushboolean( L, stat.is_sys );
+  lua_setfield( L, -2, "is_sys" );
+
+  lua_pushboolean( L, stat.is_arch );
+  lua_setfield( L, -2, "is_arch" );
+
+  // time stamp as sub-table
+  lua_createtable( L, 0, 6 );
+
+  lua_pushinteger( L, stat.tm_valid ? stat.tm.year : FILE_TIMEDEF_YEAR );
+  lua_setfield( L, -2, "year" );
+
+  lua_pushinteger( L, stat.tm_valid ? stat.tm.mon : FILE_TIMEDEF_MON );
+  lua_setfield( L, -2, "mon" );
+
+  lua_pushinteger( L, stat.tm_valid ? stat.tm.day : FILE_TIMEDEF_DAY );
+  lua_setfield( L, -2, "day" );
+
+  lua_pushinteger( L, stat.tm_valid ? stat.tm.hour : FILE_TIMEDEF_HOUR );
+  lua_setfield( L, -2, "hour" );
+
+  lua_pushinteger( L, stat.tm_valid ? stat.tm.min : FILE_TIMEDEF_MIN );
+  lua_setfield( L, -2, "min" );
+
+  lua_pushinteger( L, stat.tm_valid ? stat.tm.sec : FILE_TIMEDEF_SEC );
+  lua_setfield( L, -2, "sec" );
+
+  lua_setfield( L, -2, "time" );
+
   return 1;
 }
 
@@ -561,6 +627,7 @@ static const LUA_REG_TYPE file_map[] = {
   { LSTRKEY( "exists" ),    LFUNCVAL( file_exists ) },  
   { LSTRKEY( "fsinfo" ),    LFUNCVAL( file_fsinfo ) },
   { LSTRKEY( "on" ),        LFUNCVAL( file_on ) },
+  { LSTRKEY( "stat" ),      LFUNCVAL( file_stat ) },
 #ifdef BUILD_FATFS
   { LSTRKEY( "mount" ),     LFUNCVAL( file_mount ) },
   { LSTRKEY( "chdir" ),     LFUNCVAL( file_chdir ) },
