@@ -46,6 +46,7 @@ SUBDIRS= 					\
 	fatfs					\
 	esp-gdbstub				\
 	websocket				\
+	xml					\
 	swTimer					\
 	misc					\
 	pm					\
@@ -97,6 +98,7 @@ COMPONENTS_eagle.app.v6 = 			\
 	http/libhttp.a				\
 	pm/libpm.a				\
 	websocket/libwebsocket.a		\
+	xml/libxml.a		\
 	esp-gdbstub/libgdbstub.a		\
 	net/libnodemcu_net.a			\
 	mbedtls/libmbedtls.a      		\
