@@ -12,15 +12,25 @@
 
 static const char* parsing_error_names[] = {"EOF", "invalid character", "wrong tag", "stack overflow", "unexpected byte"};
 
-void static table2xmlbuffer(lua_State *L, luaL_Buffer *b){
-    luaL_putchar(b, '<');
+void table2xmlbuffer(lua_State *L, char** buf, int *bLen){
+    const char* s;
+    size_t sLen;
+    
     lua_pushstring(L, "xml");
     lua_rawget(L,-2);
     if(lua_isnil(L, -1))
     {
         luaL_error(L, "no tag");
     }
-    luaL_addvalue(b);
+    
+    s = lua_tolstring (L, -1, &sLen);
+    *bLen += sLen+1;
+    if(*bLen < XML_BUFSIZE){
+      *((*buf)++) = '<';
+      memcpy( *buf, s, sLen);
+      (*buf) += sLen;
+    }else luaL_error(L, "buf size");
+    lua_pop(L, 1);
 
     lua_pushnil(L);
     while(lua_next(L, -2) != 0)
@@ -42,12 +52,22 @@ void static table2xmlbuffer(lua_State *L, luaL_Buffer *b){
             }
             else
             {
-                
-                luaL_putchar(b, ' ');
-                luaL_addstring(b, key);
-                luaL_addlstring(b, "=\"", 2);
-                luaL_addvalue(b);
-                luaL_putchar(b, '"');
+                s = lua_tolstring (L, -1, &sLen);
+                *bLen += sLen+4+strlen(key);
+                if(*bLen < XML_BUFSIZE){
+                   *((*buf)++) = ' ';
+                   while(*key != 0)
+                   { 
+                      *((*buf)++) = *(key++);
+                   }
+                   *((*buf)++) = '=';
+                   *((*buf)++) = '"';
+                   memcpy( *buf, s, sLen);
+                   (*buf) += sLen;                  
+                   *((*buf)++) = '"';
+                }else luaL_error(L, "buf size");
+                lua_pop(L, 1);
+
             }
          }
     }
@@ -56,19 +76,26 @@ void static table2xmlbuffer(lua_State *L, luaL_Buffer *b){
     lua_rawgeti(L, -1, i);
     if(!lua_isnil(L, -1))
     {
-       luaL_putchar(b, '>');
+       (*bLen)++;
+       *((*buf)++) = '>';
     }
 
     while( !lua_isnil(L, -1))
     {
         if(lua_istable(L, -1))
         {   
-            table2xmlbuffer(L, b);
+            table2xmlbuffer(L, buf, bLen);
             lua_pop(L, 1);
         }
         else if(lua_isstring(L, -1))
         {
-            luaL_addvalue(b);
+               s = lua_tolstring (L, -1, &sLen);
+               *bLen += sLen;
+               if(*bLen < XML_BUFSIZE){
+                  memcpy( *buf, s, sLen);
+                  (*buf) += sLen;                  
+               }else luaL_error(L, "buf size");
+               lua_pop(L, 1);
         }
         else lua_pop(L, 1);
 	i++;
@@ -79,23 +106,35 @@ void static table2xmlbuffer(lua_State *L, luaL_Buffer *b){
     
     if(i > 1)
     {
-       luaL_putchar(b, '<');
-       luaL_putchar(b, '/');
-       lua_pushstring(L, "xml");
-       lua_rawget(L,-2);
-       luaL_addvalue(b);
+       	lua_pushstring(L, "xml");
+                lua_rawget(L,-2);
+                s = lua_tolstring (L, -1, &sLen);
+                *bLen += sLen+3;
+                if(*bLen < XML_BUFSIZE){
+                   *((*buf)++) = '<';
+                   *((*buf)++) = '/';
+                   memcpy( *buf, s, sLen);
+                   (*buf) += sLen;                  
+                   *((*buf)++) = '>';
+                }else luaL_error(L, "buf size");
+                lua_pop(L, 1);
    }
    else
    {
-       luaL_putchar(b, ' ');
-       luaL_putchar(b, '/');
-   }   
-   luaL_putchar(b, '>');
+       *bLen += 3;
+       if(*bLen < XML_BUFSIZE){
+          *((*buf)++) = ' ';
+          *((*buf)++) = '/';
+          *((*buf)++) = '>';
+       }else luaL_error(L, "buf size");
+   }
 }
 
-static int table2xml(lua_State *L){
+int table2xml(lua_State *L){
    const int number_of_arguments = lua_gettop(L);
-   int depth = 0;
+   char buf[XML_BUFSIZE];
+   char* buf_end = buf;
+   int strLen = 0;
 
    if(number_of_arguments != 1)
    {
@@ -103,14 +142,8 @@ static int table2xml(lua_State *L){
    }
 
    luaL_checktype(L, 1, LUA_TTABLE);
-
-   luaL_Buffer b; // implement your own buffer, this one needs the lua stack!
-   luaL_buffinit( L, &b );
-   char *p = luaL_prepbuffer(&b);    
-     
-   table2xmlbuffer(L, &b);
-  
-   luaL_pushresult( &b );
+   table2xmlbuffer(L, &buf_end, &strLen);
+   lua_pushlstring(L, buf, strLen);
    return 1;
 }
 
@@ -185,7 +218,6 @@ static int xml2table(lua_State *L){
 	        lua_pushinteger(L, lua_objlen(L,-1)+1);
                 lua_pushlstring(L, contbuf, contbufptr-contbuf); /*push value*/
                 contbufptr = contbuf;
-                //lua_rawseti (L, -2, lua_objlen(L,-2)+1);
                 lua_settable(L, -3);
             }
             if(lua_gettop(L) > initialTop)
@@ -227,7 +259,7 @@ static int xml2table(lua_State *L){
 	    {
 	       luaL_error(L, "buf size");
 	    }
-	    if(contbufptr != contbuf || // nur front trimmen
+	    if(contbufptr != contbuf || // front trim
 		!isWhitespace(xml.data[0]))
             {
                 *(contbufptr++) = xml.data[0];
@@ -254,21 +286,9 @@ static const LUA_REG_TYPE xml_map[] =
   { LNILKEY, LNILVAL }
 };
 
-/*
-static const LUA_REG_TYPE websocketclient_map[] =
-{
-  { LSTRKEY("on"), LFUNCVAL(websocketclient_on) },
-  { LSTRKEY("connect"), LFUNCVAL(websocketclient_connect) },
-  { LSTRKEY("send"), LFUNCVAL(websocketclient_send) },
-  { LSTRKEY("close"), LFUNCVAL(websocketclient_close) },
-  { LSTRKEY("__gc" ), LFUNCVAL(websocketclient_gc) },
-  { LSTRKEY("__index"), LROVAL(websocketclient_map) },
-  { LNILKEY, LNILVAL }
-};
-*/
 
 int loadXmlModule(lua_State *L) {
-  // luaL_rometatable(L, METATABLE_XML, (void *) websocketclient_map);
+  // luaL_rometatable(L, METATABLE_XML, (void *) xml_map);
 
   return 0;
 }
